@@ -202,7 +202,7 @@ static class BetterIdle
 })();
 ";
 
-    const string Version = "0.0.6";
+    const string Version = "0.0.7";
 
     const string Tags = "https://api.github.com/repos/de18u/better-idle-releases/tags?per_page=100";  // ponytail: first 100 tags only
     const string Raw = "https://raw.githubusercontent.com/de18u/better-idle-releases/";
@@ -282,11 +282,13 @@ static class BetterIdle
         }
     }
 
-    static void SyncDiscord()
+    static bool SyncDiscord()
     {
         string want = discord.Checked ? DiscordOn : DiscordOff;
+        bool wrote = false;
         foreach (string index in Cores())
-            try { if (File.ReadAllText(index) != want) File.WriteAllText(index, want); } catch { }
+            try { if (File.ReadAllText(index) != want) { File.WriteAllText(index, want); wrote = true; } } catch { }
+        return wrote;
     }
 
     static void SyncSteam()
@@ -354,6 +356,22 @@ static class BetterIdle
         }
         catch { }
         try { Process.Start(update, "--processStart Discord.exe"); } catch { }
+    }
+
+    static DateTime lastRelaunch = DateTime.MinValue;
+
+    // an update on launch swaps index.js after Discord already loaded it
+    static void RelaunchIfJustStarted()
+    {
+        try
+        {
+            Process[] all = Process.GetProcessesByName("Discord");
+            if (all.Length == 0 || DateTime.Now - all.Min(p => p.StartTime) > TimeSpan.FromMinutes(2)) return;
+        }
+        catch { return; }
+        if (DateTime.Now - lastRelaunch < TimeSpan.FromMinutes(10)) return;  // no loop if every launch swaps it
+        lastRelaunch = DateTime.Now;
+        RestartDiscord();
     }
 
     // the marker file only takes effect on a fresh Steam launch
@@ -483,7 +501,7 @@ static class BetterIdle
         name.Enabled = false;  // a heading, not a command
         tray.ContextMenu.MenuItems.Add("-");
         discord = tray.ContextMenu.MenuItems.Add("Discord",
-            delegate { Toggle(discord, SyncDiscord, RestartDiscord); });
+            delegate { Toggle(discord, () => SyncDiscord(), RestartDiscord); });
         steam = tray.ContextMenu.MenuItems.Add("Steam",
             delegate { Toggle(steam, SyncSteam, RestartSteam); });
         tray.ContextMenu.MenuItems.Add("-");
@@ -495,12 +513,11 @@ static class BetterIdle
         ShowState();
         tray.Visible = true;
 
-        SyncDiscord();
         SyncSteam();
         // Discord updates overwrite index.js, and Steam drops the script when it restarts
         timer = new System.Threading.Timer(delegate
         {
-            SyncDiscord();
+            if (SyncDiscord()) RelaunchIfJustStarted();
             if (steam.Checked) Inject();
         }, null, 0, 30000);
         SynchronizationContext ui = new WindowsFormsSynchronizationContext();  // this thread owns the mutex
